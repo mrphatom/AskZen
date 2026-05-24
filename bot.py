@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 BOT_TOKEN      = os.getenv("BOT_TOKEN", "")
 GROQ_API_KEY   = os.getenv("GROQ_API_KEY", "")
 FREE_LIMIT     = 20          # free messages per day
-PREMIUM_STARS  = 250         # Telegram Stars price (~$3.50)
+PREMIUM_STARS  = 750         # Telegram Stars price (~$3.50)
 PREMIUM_DAYS   = 30
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 
