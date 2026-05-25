@@ -76,16 +76,16 @@ def main_kb() -> InlineKeyboardMarkup:
 
 
 def mode_kb() -> InlineKeyboardMarkup:
-    buttons, row = [], []
+    buttons = []
+    # This loops through your modes and puts each button inside its own list [ ]
+    # which forces Telegram to stack them vertically instead of side-by-side.
     for key, m in MODES.items():
-        row.append(InlineKeyboardButton(m["name"], callback_data=f"mode_{key}"))
-        if len(row) == 2:
-            buttons.append(row)
-            row = []
-    if row:
-        buttons.append(row)
+        buttons.append([InlineKeyboardButton(m["name"], callback_data=f"mode_{key}")])
+    
+    # Back button goes on its own clean row at the bottom
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="show_main")])
     return InlineKeyboardMarkup(buttons)
+
 
 def back_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="show_main")]])
