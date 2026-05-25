@@ -87,7 +87,6 @@ def mode_kb() -> InlineKeyboardMarkup:
     buttons.append([InlineKeyboardButton("⬅️ Back", callback_data="show_main")])
     return InlineKeyboardMarkup(buttons)
 
-
 def back_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="show_main")]])
 
