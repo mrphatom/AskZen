@@ -16,13 +16,14 @@ class Database:
         with self._conn() as conn:
             conn.executescript("""
                 CREATE TABLE IF NOT EXISTS users (
-                    user_id     INTEGER PRIMARY KEY,
-                    username    TEXT,
-                    first_name  TEXT,
-                    is_premium  INTEGER DEFAULT 0,
+                    user_id       INTEGER PRIMARY KEY,
+                    username      TEXT,
+                    first_name    TEXT,
+                    is_premium    INTEGER DEFAULT 0,
                     premium_until TEXT,
-                    mode        TEXT DEFAULT 'general',
-                    created_at  TEXT DEFAULT CURRENT_TIMESTAMP
+                    mode          TEXT DEFAULT 'general',
+                    bonus_msgs    INTEGER DEFAULT 0,
+                    created_at    TEXT DEFAULT CURRENT_TIMESTAMP
                 );
 
                 CREATE TABLE IF NOT EXISTS usage (
@@ -33,17 +34,28 @@ class Database:
                 );
 
                 CREATE TABLE IF NOT EXISTS conversations (
-                    user_id     INTEGER PRIMARY KEY,
-                    messages    TEXT DEFAULT '[]'
+                    user_id  INTEGER PRIMARY KEY,
+                    messages TEXT DEFAULT '[]'
+                );
+
+                CREATE TABLE IF NOT EXISTS referrals (
+                    referrer_id  INTEGER,
+                    referred_id  INTEGER PRIMARY KEY,
+                    rewarded     INTEGER DEFAULT 0
                 );
             """)
+            # Migrate: add bonus_msgs if missing (for existing DBs)
+            try:
+                conn.execute("ALTER TABLE users ADD COLUMN bonus_msgs INTEGER DEFAULT 0")
+            except Exception:
+                pass
 
     # ── Users ─────────────────────────────────────────────────────────────────
 
     def get_or_create_user(self, user_id: int, username: str = None, first_name: str = None) -> dict:
         with self._conn() as conn:
             row = conn.execute(
-                "SELECT user_id, username, first_name, is_premium, premium_until, mode "
+                "SELECT user_id, username, first_name, is_premium, premium_until, mode, bonus_msgs "
                 "FROM users WHERE user_id = ?", (user_id,)
             ).fetchone()
 
@@ -52,9 +64,11 @@ class Database:
                     "INSERT INTO users (user_id, username, first_name) VALUES (?, ?, ?)",
                     (user_id, username, first_name)
                 )
-                return {"user_id": user_id, "is_premium": 0, "mode": "general"}
+                return {"user_id": user_id, "is_premium": 0, "mode": "general", "bonus_msgs": 0}
 
-            return dict(zip(["user_id", "username", "first_name", "is_premium", "premium_until", "mode"], row))
+            return dict(zip(
+                ["user_id", "username", "first_name", "is_premium", "premium_until", "mode", "bonus_msgs"], row
+            ))
 
     # ── Premium ───────────────────────────────────────────────────────────────
 
@@ -65,7 +79,6 @@ class Database:
             ).fetchone()
             if not row or not row[0]:
                 return False
-            # Check expiry
             if row[1] and row[1] < date.today().isoformat():
                 conn.execute("UPDATE users SET is_premium = 0 WHERE user_id = ?", (user_id,))
                 return False
@@ -106,6 +119,36 @@ class Database:
                 (user_id, today)
             )
 
+    # ── Bonus Messages ────────────────────────────────────────────────────────
+
+    def get_bonus_msgs(self, user_id: int) -> int:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT bonus_msgs FROM users WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            return row[0] if row else 0
+
+    def add_bonus_msgs(self, user_id: int, count: int):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE users SET bonus_msgs = bonus_msgs + ? WHERE user_id = ?",
+                (count, user_id)
+            )
+
+    def use_bonus_msg(self, user_id: int) -> bool:
+        """Use one bonus message. Returns True if successful."""
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT bonus_msgs FROM users WHERE user_id = ?", (user_id,)
+            ).fetchone()
+            if row and row[0] > 0:
+                conn.execute(
+                    "UPDATE users SET bonus_msgs = bonus_msgs - 1 WHERE user_id = ?",
+                    (user_id,)
+                )
+                return True
+            return False
+
     # ── Mode ──────────────────────────────────────────────────────────────────
 
     def get_mode(self, user_id: int) -> str:
@@ -119,6 +162,45 @@ class Database:
         with self._conn() as conn:
             conn.execute("UPDATE users SET mode = ? WHERE user_id = ?", (mode, user_id))
 
+    # ── Referrals ─────────────────────────────────────────────────────────────
+
+    def create_referral(self, referrer_id: int, referred_id: int) -> bool:
+        """Register referral. Returns True if new, False if already exists."""
+        if referrer_id == referred_id:
+            return False
+        with self._conn() as conn:
+            existing = conn.execute(
+                "SELECT 1 FROM referrals WHERE referred_id = ?", (referred_id,)
+            ).fetchone()
+            if existing:
+                return False
+            conn.execute(
+                "INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)",
+                (referrer_id, referred_id)
+            )
+            return True
+
+    def get_referrer(self, referred_id: int) -> Optional[int]:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT referrer_id FROM referrals WHERE referred_id = ? AND rewarded = 0",
+                (referred_id,)
+            ).fetchone()
+            return row[0] if row else None
+
+    def mark_referral_rewarded(self, referred_id: int):
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE referrals SET rewarded = 1 WHERE referred_id = ?", (referred_id,)
+            )
+
+    def get_referral_count(self, referrer_id: int) -> int:
+        with self._conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (referrer_id,)
+            ).fetchone()
+            return row[0] if row else 0
+
     # ── Conversation ──────────────────────────────────────────────────────────
 
     def get_conversation(self, user_id: int) -> List[Dict]:
@@ -129,7 +211,7 @@ class Database:
             return json.loads(row[0]) if row else []
 
     def save_conversation(self, user_id: int, messages: List[Dict]):
-        messages = messages[-24:]  # Keep last 24 turns (12 exchanges)
+        messages = messages[-24:]
         data = json.dumps(messages)
         with self._conn() as conn:
             conn.execute(
